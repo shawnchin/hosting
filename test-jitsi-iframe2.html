@@ -28,7 +28,7 @@
     const domain = 'meet.jit.si';
     const options = {
         roomName: 'TestMeetRandomPage-' + (+new Date()),
-        useHostPageLocalStorage: true,
+        configOverwrite: { useHostPageLocalStorage: true },
         parentNode: document.querySelector('#meet'),
     };
     const api = new JitsiMeetExternalAPI(domain, options);
