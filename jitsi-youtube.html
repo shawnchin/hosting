@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Meet</title>
+    <script src='https://meet.jit.si/external_api.js'></script>
+    <style>
+        html {
+            overflow: auto;
+        }
+
+        html,
+        body,
+        div,
+        iframe {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            border: none;
+        }
+
+    </style>
+</head>
+<body>
+<div id='meet'></div>
+
+<script>
+    const domain = 'meet.jit.si';
+    const options = {
+        roomName: 'TestMeetRandomPage-' + (+new Date()),
+        parentNode: document.querySelector('#meet'),
+    };
+    const api = new JitsiMeetExternalAPI(domain, options);
+    api.addListener('videoConferenceJoined', () => {
+        api.executeCommand('startShareVideo', 'https://www.youtube.com/watch?v=cvh0nX08nRw');
+    }
+</script>
+</body>
+</html>
+
