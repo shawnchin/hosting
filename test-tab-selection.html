@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test doGetMedia with preferCurrentTab</title>
+</head>
+<body>
+<button id="btn1">getDisplayMedia</button>
+<button id="btn2">getDisplayMedia (prefer current tab)</button>
+<p id="msg"></p>
+
+<script>
+    const button1 = document.getElementById("btn1");
+    const button2 = document.getElementById("btn2");
+    const message = document.getElementById("msg");
+
+    async function doGetMedia(constraints) {
+        let title = document.title;
+
+        // temporarily change title to make it easier to spot
+        document.title = "👉 (SELECT THIS TO RECORD MEETING) " + title;
+
+        let stream = await navigator.mediaDevices
+            .getDisplayMedia(constraints)
+            .catch((e) => {
+                message.innerText = 'Error: ' + e;
+                console.error(e);
+                document.title = title;  // restore title
+            })
+
+        document.title = title;  // restore title
+
+        let surface = stream.getVideoTracks()[0].getSettings();
+        console.log(surface);
+        message.innerText = JSON.stringify(surface, null, "\t");
+    }
+
+    button1.addEventListener('click', async () => {
+        doGetMedia({
+            video: {
+                displaySurface: "browser",
+            }
+        })
+    });
+
+    button2.addEventListener('click', async () => {
+        doGetMedia({
+            video: {
+                displaySurface: "browser",
+            },
+            preferCurrentTab: true,
+        })
+    });
+</script>
+</body>
+</html>
+
