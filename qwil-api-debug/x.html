@@ -3,13 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <title>Test</title>
+  <style>
+    body {
+      background: white;
+    }
+
+    div {
+      margin-top: 20px;
+    }
+  </style>
 </head>
 <body>
   <div>
     <a href="https://qwil.io" target="_blank">Open in new window</a>
   </div>
   <div>
-    <a href="https://qwil.page.link/?link=https://web.qwil.io&apn=io.qwil.android&isi=1356119152&ibi=io.qwil.mobile&ius=io.qwil.mobile&efr=1" target="_blank">Open app</a>
+    <a href="https://qwil.page.link/?link=https://web.qwil.io&apn=io.qwil.android&isi=1356119152&ibi=io.qwil.mobile&ius=io.qwil.mobile&efr=1" target="_blank">Open app with universal link</a>
+  </div>
+  <div>
+    <a href="qwil:///">Open app with custom scheme</a>
   </div>
 </body>
 </html>
