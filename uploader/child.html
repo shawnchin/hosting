@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Title</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body {
+      background-color: lightgray;
+    }
+
+    .group {
+      margin: 20px;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<!--Intentionally place this far away to see where the popup triggers-->
+<input id='hidden-input' type="file" accept="image/*" class='hidden' />
+
+<div class="group">
+  Generic File upload
+  <div>
+    <input type="file"/>
+  </div>
+</div>
+
+<div class="group">
+  PDF upload
+
+  <div>
+    <input type="file" accept="application/pdf"/>
+  </div>
+</div>
+
+<div class="group">
+  Subset of accepted mimetypes (pdf, image, word)
+
+  <div>
+    <input type="file" accept="application/pdf,application/msword,image/*"/>
+  </div>
+</div>
+
+
+<div class="group">
+  Image upload (no explicit capture)
+
+  <div>
+    <input type="file" accept="image/*"/>
+  </div>
+</div>
+
+<div class="group">
+  Image upload (capture='environment')
+  <div>
+    <input type="file" capture="environment" accept="image/*"/>
+  </div>
+  (capture attribute support by browser: <span id="capture-supported">??</span>)
+</div>
+
+<div class="group">
+  Hidden input element for image upload (no explicit capture)
+
+  <div>
+    <button id="do-upload">Proxy button</button>
+
+  </div>
+
+</div>
+
+<script>
+
+  function doUpload() {
+    document.getElementById('hidden-input').click();
+  }
+
+  function isCaptureSupported () {
+    const el = document.createElement('input')
+    return el.capture !== undefined;
+  }
+
+  document.getElementById('capture-supported').innerText = '' + isCaptureSupported();
+  document.getElementById('do-upload').addEventListener('click', doUpload);
+</script>
+</body>
+</html>
