@@ -8,15 +8,21 @@ function onLoadedCallback() {
 function loadArcade(url) {
   if (!_arcadeLoaderConfig) {
     console.error('configureArcade() not called');
-    return
+    return;
   }
 
-  const iframe = document.createElement("iframe");
-  iframe.onload = onLoadedCallback;
-  iframe.width = '100%';
-  iframe.height = '100%';
-  iframe.src = _arcadeLoaderConfig.url;
-  document.getElementById(_arcadeLoaderConfig.containerId).appendChild(iframe);
+  console.log('DELAYING LOAD...');
+
+  setTimeout(() => {
+    console.log("LOAD!")
+    const iframe = document.createElement("iframe");
+    iframe.onload = onLoadedCallback;
+    iframe.width = '100%';
+    iframe.height = '100%';
+    iframe.src = _arcadeLoaderConfig.url;
+    document.getElementById(_arcadeLoaderConfig.containerId).appendChild(iframe);
+  }, 3000);
+
 }
 
 
