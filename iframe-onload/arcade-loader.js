@@ -1,11 +1,11 @@
 let _arcadeLoaderConfig = undefined;
 
 function onLoadedCallback() {
-  // This func should be replaced by iframe parent before calling load()
+  // This func should be replaced by iframe parent before calling loadArcade()
   console.log("Loaded");
 }
 
-function load(url) {
+function loadArcade(url) {
   if (!_arcadeLoaderConfig) {
     console.error('configureArcade() not called');
     return
