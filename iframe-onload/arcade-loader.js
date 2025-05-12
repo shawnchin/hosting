@@ -1,14 +1,22 @@
-let _arcadeLoaderConfig = undefined;
+function initTransport() {
+  const hashParams = new URLSearchParams(window.location.hash.substring(1));
+  const transportScope = hashParams.get('scope');
 
-function onLoadedCallback() {
-  // This func should be replaced by iframe parent before calling loadArcade()
-  console.log("Loaded");
+  return new QwilApiTransport.Transport({
+    scope: transportScope,
+    window: window.parent,
+    eventHandler: function() {},
+  });
 }
 
-function loadArcade(url) {
-  if (!_arcadeLoaderConfig) {
-    console.error('configureArcade() not called');
-    return;
+
+function loadArcade(config) {
+
+  transport = initTransport();
+  transport.sendEvent('__wrapper_loaded');
+
+  function onLoad() {
+    transport.sendEvent('__content_loaded');
   }
 
   console.log('DELAYING LOAD...');
@@ -16,22 +24,23 @@ function loadArcade(url) {
   setTimeout(() => {
     console.log("LOAD!")
     const iframe = document.createElement("iframe");
-    iframe.onload = onLoadedCallback;
+    iframe.onload = onLoad;
     iframe.width = '100%';
     iframe.height = '100%';
-    iframe.src = _arcadeLoaderConfig.url;
-    document.getElementById(_arcadeLoaderConfig.containerId).appendChild(iframe);
+    iframe.src = config.url;
+    document.getElementById(config.containerId).appendChild(iframe);
+
   }, 3000);
 
 }
 
 
-function configureArcade(config) {
+function embedArcade(config) {
   if (!config.url) {
     console.error('"url" not set');
   } else if (!config.containerId) {
     console.error('"containerId" not set');
   } else {
-    _arcadeLoaderConfig = config;
+    loadArcade(config);
   }
 }

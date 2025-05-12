@@ -3,22 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <title>Test IFrame onLoad</title>
+  <script src="qwil-api-transport.min.js"></script>
   <script src="arcade-loader.js"></script>
   <link rel="stylesheet" href="arcade-loader.css">
 </head>
 <body>
 <div id="content" class="arcade-container"></div>
 <script>
-  configureArcade({
+  embedArcade({
     url: "https://app.arcade.software/DCM9md6dqhvnldRFYcgE",
     containerId: "content",
   });
-
-  /**
-   * Uncomment the following to test locally.
-   * In actual deployment, parent will override onLoadedCallback before calling loadArcade().
-   */
-  // loadArcade();
 </script>
 </body>
 </html>
