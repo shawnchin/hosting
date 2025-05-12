@@ -2,6 +2,9 @@ function initTransport() {
   const hashParams = new URLSearchParams(window.location.hash.substring(1));
   const transportScope = hashParams.get('scope');
 
+  console.log(`[NESTED] location = ${window.location}`);
+  console.log(`[NESTED] scope = ${transportScope}`);
+
   return new QwilApiTransport.Transport({
     scope: transportScope,
     window: window.parent,
@@ -24,6 +27,8 @@ function loadArcade(config) {
   setTimeout(() => {
     console.log("LOAD!")
     const iframe = document.createElement("iframe");
+    iframe.frameBorder = 0;
+    iframe.style.border = '0px';
     iframe.onload = onLoad;
     iframe.width = '100%';
     iframe.height = '100%';
