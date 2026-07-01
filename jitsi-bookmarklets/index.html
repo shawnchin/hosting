@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Jitsi Bookmarklets</title>
+  <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+  >
+</head>
+<body>
+<main class="container">
+  <h1>Jitsi Bookmarklets</h1>
+
+
+  <h2>Brighten videos</h2>
+  <p>
+    For details, see <a target="_blank"
+                        href="https://community.jitsi.org/t/tip-more-vivid-colors-at-the-meeting/142372">Community
+    Post: more vivid colors at the meeting</a>
+  </p>
+  <p>
+    How do I use this?
+  </p>
+  <ol>
+    <li>Drag the following to your bookmark bar &rarr;
+      <a href="javascript:!function(){var e=document.createElement(%22style%22);e.innerText=%22video { filter: brightness(1.15) contrast(1.06) saturate(1.12);} %22,document.head.appendChild(e)}();">Jitsi-brighten-videos</a>
+    </li>
+    <li>
+      Whenever you're in a meeting and want to brighten all videos, just click that bookmark item.
+    </li>
+    <li>
+      Yes, that's it.
+    </li>
+  </ol>
+
+  <p>
+    What does that script do? It runs the following javascript to inject inline CSS that styles all video elements on the page.
+  </p>
+<pre><code>
+var s = document.createElement('style')
+s.innerText = "video { filter: brightness(1.15) contrast(1.06) saturate(1.12);} ";
+document.head.appendChild(s)
+
+</code></pre>
+</main>
+</body>
+</html>
