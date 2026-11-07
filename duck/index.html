@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Duck Duck Chicken</title>
+<title>Duck Duck Egg</title>
 <style>
   html, body { margin: 0; height: 100%; background: #2d3436; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center;
@@ -26,7 +26,7 @@
 <canvas id="game"></canvas>
 <div id="gate" aria-live="polite">
   <div class="card">
-    <h1>Duck Duck <span>Chicken</span></h1>
+    <h1>Duck Duck <span>Egg</span></h1>
     <p id="gate-msg"></p>
     <p class="needs">To play you need:</p>
     <ul id="gate-list"></ul>
@@ -37,9 +37,9 @@
 <script>
 'use strict';
 /* ======================================================================
-   DUCK DUCK CHICKEN
-   A snake-style game: a mother duck (or hen) collects eggs that hatch into
-   ducklings (or chicks) following behind her. Single file, no assets.
+   DUCK DUCK EGG
+   A snake-style game: a mother duck collects eggs that hatch into ducklings
+   following behind her. Player 2 is a mallard. Single file, no assets.
 
    Sections: CONFIG · utils · Storage · Audio · Input · Sprites · Particles
              · Level generation · Game (state machine + tick logic)
@@ -54,8 +54,10 @@ const CONFIG = {
   startBabies: 2,
   baseTps: 6, tpsPerEgg: 0.25, maxTps: 12,    // ticks per second ramp
   eggPoints: 10,
-  fox: { firstAt: 15, intervalStart: 20, intervalMin: 10, max: 4 },
+  fox: { firstAt: 15, intervalStart: 20, intervalMin: 10, max: 4,
+         napMin: 3, napMax: 6, strollMin: 1, strollMax: 3, stepEvery: 0.6 }, // foxes wander in real seconds, not ticks
   cake: { after: 20, every: 10, chance: 1 / 3, lifetime: 15 },
+  teenTakeoff: 0.35, // seconds the grown-up duckling hops in place before flying off
   potion: { after: 20, every: 10, chance: 1 / 3, lifetime: 15 },
   eggRollEveryTicks: 2,                       // magnetised egg moves every N ticks
   spawnClearance: 4,                          // min tile distance from a head for spawns
@@ -65,8 +67,9 @@ const CONFIG = {
 };
 const C = {
   grass: '#a1db93', bladeDark: '#8fcf80', bladeLight: '#b5e5a8', hedge: '#6ab04c', hedgeDark: '#4f8f36',
-  duck: '#fff3a1', duckShade: '#f3dd6e', whiteDuck: '#fffdf0', beakOrange: '#ff9f1c',
-  hen: '#e67e22', henShade: '#c9661a', comb: '#e74c3c', beakYellow: '#f9ca24', chick: '#ffeaa7',
+  duck: '#fff3a1', duckShade: '#f3dd6e', beakOrange: '#ff9f1c',
+  mallardHead: '#2e8b57', mallardHeadShade: '#1f6240', mallardBody: '#9b6a3c', mallardShade: '#6e4825', wing: '#b2bec3', wingShade: '#8a979e', ring: '#fffdf0', speculum: '#3b82c4', beakYellow: '#f9ca24',
+  mDuckling: '#b89258', mDucklingShade: '#86652f', mFace: '#f5de7a',
   egg: '#fffdf0', dotPink: '#ffb8c6', dotBlue: '#a8d8ff',
   fox: '#e67e22', foxDark: '#c9661a', cheek: '#ffffff', nose: '#2d3436',
   glass: '#dfe6e9', potion: '#a29bfe', cork: '#b8865b',
@@ -78,9 +81,9 @@ const C = {
 const DIRS = { right: [1, 0], left: [-1, 0], up: [0, -1], down: [0, 1] };
 const OPPOSITE = { right: 'left', left: 'right', up: 'down', down: 'up' };
 const MODES = {
-  duck:   { name: 'DUCK',            sub: '1 player · arrows', players: 1, board: 'duck' },
+  duck:   { name: 'DUCK',            sub: '1 player · arrows or WASD', players: 1, board: 'duck' },
   coop:   { name: 'DUCK & DUCK',     sub: '2 player co-op',    players: 2, board: 'coop' },
-  versus: { name: 'DUCK vs CHICKEN', sub: '2 player versus',   players: 2, board: null },
+  versus: { name: 'DUCK vs DUCK',    sub: '2 player versus',   players: 2, board: null },
 };
 const MODE_ORDER = ['duck', 'coop', 'versus'];
 
@@ -98,6 +101,8 @@ const wrapDelta = (from, to, size) => { let d = to - from; if (d > size / 2) d -
 /* Manhattan distance on the torus */
 const torusDist = (a, b) => Math.abs(wrapDelta(a.x, b.x, COLS)) + Math.abs(wrapDelta(a.y, b.y, ROWS));
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+/* Display name of a bird family, used in versus text */
+const birdName = b => b.kind === 'mallard' ? 'Mallard' : 'Yellow Duck';
 function fmtTime(s) { s = Math.floor(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function fmtDate(d) { return d.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()]; }
 
@@ -106,19 +111,26 @@ function fmtDate(d) { return d.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'M
 const Storage = {
   get(k, fallback) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
-  scores(board) { return this.get('ddc.scores.' + board, []); },
+  scores(board) { return this.get('dde.scores.' + board, []); },
   /* Insert a score, keep top 5. Returns { index (or -1), isRecord, hadScores }. */
   addScore(board, entry) {
     const list = this.scores(board), hadScores = list.length > 0;
     const isRecord = hadScores && entry.score > list[0].score;
     list.push(entry); list.sort((a, b) => b.score - a.score);
     const index = list.indexOf(entry); list.length = Math.min(list.length, 5);
-    this.set('ddc.scores.' + board, list);
+    this.set('dde.scores.' + board, list);
     return { index: index < 5 ? index : -1, isRecord, hadScores };
   },
-  settings() { return Object.assign({ music: true, sfx: true }, this.get('ddc.settings', {})); },
-  saveSettings(s) { this.set('ddc.settings', s); },
+  settings() { return Object.assign({ music: true, sfx: true }, this.get('dde.settings', {})); },
+  saveSettings(s) { this.set('dde.settings', s); },
+  /* One-off: carry scores/settings saved under the game's old name (Duck Duck Chicken) over to the new keys. */
+  migrate() {
+    for (const k of ['scores.duck', 'scores.coop', 'settings']) {
+      try { const old = localStorage.getItem('ddc.' + k); if (old !== null && localStorage.getItem('dde.' + k) === null) localStorage.setItem('dde.' + k, old); } catch (e) { /* ignore */ }
+    }
+  },
 };
+Storage.migrate();
 const settings = Storage.settings();
 
 /* ----------------------------------------------------------------- Audio */
@@ -175,8 +187,12 @@ const Audio = {
       case 'crash':    this.tone(300, 'square', 0.12, 0.12, 0, 120); this.noise(0.15, 0.15, 0, 1500); this.tone(160, 'triangle', 0.3, 0.12, 0.12, 60); break;
       case 'potion':   this.noise(0.25, 0.2, 0, 6000); [100, 97, 93, 88, 84, 79].forEach((n, i) => this.tone(N(n), 'sine', 0.12, 0.08, 0.05 + i * 0.05)); break;
       case 'roll':     this.tone(N(60), 'triangle', 0.05, 0.05); break;
-      case 'cake':     [72, 72, 74, 72, 77, 76].forEach((n, i) => this.tone(N(n), 'triangle', 0.14, 0.1, i * 0.1)); this.noise(0.2, 0.15, 0.6, 3000); break;
-      case 'teen':     this.tone(N(84), 'triangle', 0.3, 0.08, 0, N(96)); break;
+      case 'cake':     // rising C-major fanfare with a shimmering top note and a party-popper pop
+                       [72, 76, 79, 84].forEach((n, i) => { this.tone(N(n), 'square', 0.1, 0.07, i * 0.07); this.tone(N(n + 12), 'triangle', 0.12, 0.05, i * 0.07); });
+                       this.tone(N(88), 'triangle', 0.45, 0.1, 0.28); this.tone(N(100), 'sine', 0.4, 0.05, 0.3, N(103));
+                       for (let i = 0; i < 5; i++) this.tone(N(96 + [0, 4, 7, 11, 12][i]), 'sine', 0.1, 0.04, 0.34 + i * 0.05);
+                       this.noise(0.18, 0.2, 0.28, 4000); break;
+      case 'teen':     this.tone(N(84), 'triangle', 0.3, 0.08, 0, N(96)); this.noise(0.25, 0.12, 0, 1200); this.noise(0.2, 0.08, 0.12, 1200); break;
       case 'menu':     this.tone(N(84), 'square', 0.05, 0.06); break;
       case 'select':   this.tone(N(79), 'square', 0.07, 0.08); this.tone(N(91), 'square', 0.12, 0.08, 0.07); break;
       case 'pause':    this.tone(N(76), 'triangle', 0.1, 0.1); this.tone(N(69), 'triangle', 0.16, 0.1, 0.1); break;
@@ -216,8 +232,11 @@ const Audio = {
 
 /* ----------------------------------------------------------------- Input */
 const Input = {
-  P1: { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' },
-  P2: { KeyW: 'up', KeyS: 'down', KeyA: 'left', KeyD: 'right' },
+  /* P1 starts on the left of the field, so it gets the left-hand cluster. */
+  P1: { KeyW: 'up', KeyS: 'down', KeyA: 'left', KeyD: 'right' },
+  P2: { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' },
+  /* Single player: either hand works. */
+  SOLO: { KeyW: 'up', KeyS: 'down', KeyA: 'left', KeyD: 'right', ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' },
   init(game) {
     window.addEventListener('keydown', e => {
       Audio.unlock();
@@ -279,55 +298,73 @@ function drawDuck(ctx, cx, cy, dir, opts = {}) {
   circle(ctx, hx - dx * 2 + px * 8, hy - dy * 2 + py * 8, 2.2, 'rgba(255,150,150,0.5)');
   circle(ctx, hx - dx * 2 - px * 8, hy - dy * 2 - py * 8, 2.2, 'rgba(255,150,150,0.5)');
 }
-function drawDuckling(ctx, cx, cy, dir, bob = 0, body = C.duck) {
+function drawDuckling(ctx, cx, cy, dir, bob = 0, body = C.duck, shade = true) {
   const [dx, dy] = DIRS[dir], px = -dy, py = dx;
-  shadow(ctx, cx, cy + 9, 7, 3); cy += bob;
+  if (shade) shadow(ctx, cx, cy + 9, 7, 3); cy += bob;
   circle(ctx, cx - dx * 2, cy + 1, 7, body, C.duckShade, 1.2);
   const hx = cx + dx * 4, hy = cy - 4 + dy * 3;
   circle(ctx, hx, hy, 5.5, body, C.duckShade, 1.2);
   ctx.beginPath(); ctx.moveTo(hx + dx * 4 + px * 2, hy + dy * 4 + py * 2); ctx.lineTo(hx + dx * 9, hy + dy * 9); ctx.lineTo(hx + dx * 4 - px * 2, hy + dy * 4 - py * 2); ctx.closePath(); ctx.fillStyle = C.beakOrange; ctx.fill();
   circle(ctx, hx + dx + px * 2.5, hy + dy + py * 2.5, 1.6, C.ink); circle(ctx, hx + dx - px * 2.5, hy + dy - py * 2.5, 1.6, C.ink);
 }
-function drawHen(ctx, cx, cy, dir, opts = {}) {
-  const [dx, dy] = DIRS[dir], px = -dy, py = dx;
+/* Mallard drake (Player 2): green head, white neck ring, chestnut body, grey wing with a blue speculum */
+function drawMallard(ctx, cx, cy, dir, opts = {}) {
+  const [dx, dy] = DIRS[dir], px = -dy, py = dx, rot = Math.atan2(dy, dx);
   shadow(ctx, cx, cy + 12, 13, 5);
-  for (let i = -1; i <= 1; i++) ellipse(ctx, cx - dx * 15 + px * i * 5, cy - dy * 15 + py * i * 5, 7, 3.5, Math.atan2(dy, dx) + i * 0.5, C.henShade);
-  ellipse(ctx, cx - dx * 4, cy - dy * 4 + 2, 13 - Math.abs(dx) * 2, 11 + Math.abs(dx) * 2, 0, C.hen, C.henShade, 1.5);
-  ellipse(ctx, cx - dx * 6 + px * 2, cy - dy * 6 + py * 2 + 2, 7, 4.5, Math.atan2(dy, dx) + 0.3, C.henShade);
-  const hx = cx + dx * 7, hy = cy + dy * 7 - 5;
-  circle(ctx, hx + dx * 9, hy + dy * 9 + 5, 3, C.comb);
-  circle(ctx, hx, hy, 10, C.hen, C.henShade, 1.5);
-  for (let i = -1; i <= 1; i++) circle(ctx, hx + i * 4 - dx * 2, hy - 9 - (i === 0 ? 2 : 0), 3.5, C.comb);
-  beak(ctx, hx, hy, dx, dy, px, py, 15, 3.5, C.beakYellow, '#d9a90e');
+  ellipse(ctx, cx - dx * 5, cy - dy * 5 + 2, 13 - Math.abs(dx) * 2, 11 + Math.abs(dx) * 2, 0, C.mallardBody, C.mallardShade, 1.5);
+  ellipse(ctx, cx - dx * 16, cy - dy * 16 + 2, 4, 3, rot, C.mallardShade, C.mallardShade, 1.2);
+  ellipse(ctx, cx - dx * 7 + px * 2, cy - dy * 7 + py * 2 + 2, 7, 4.5, rot + 0.3, C.wing, C.wingShade, 1.2);
+  ellipse(ctx, cx - dx * 10 + px * 3, cy - dy * 10 + py * 3 + 2, 3, 1.6, rot + 0.3, C.speculum);
+  const hx = cx + dx * 7, hy = cy + dy * 7 - 4;
+  circle(ctx, hx - dx * 4, hy - dy * 4 + 2, 9, C.ring);
+  circle(ctx, hx, hy, 10, C.mallardHead, C.mallardHeadShade, 1.5);
+  beak(ctx, hx, hy, dx, dy, px, py, 16, 4, C.beakYellow, '#d9a90e');
   const eye = opts.dizzy ? dizzyEye : glossyEye;
   eye(ctx, hx + dx * 2 + px * 4.5, hy + dy * 2 + py * 4.5, opts.dizzy ? 2.5 : 4);
   eye(ctx, hx + dx * 2 - px * 4.5, hy + dy * 2 - py * 4.5, opts.dizzy ? 2.5 : 4);
 }
-function drawChick(ctx, cx, cy, dir, bob = 0, tilt = 0) {
+/* Mallard duckling: olive-brown with a yellow face and a dark eye stripe */
+function drawMallardDuckling(ctx, cx, cy, dir, bob = 0, shade = true) {
   const [dx, dy] = DIRS[dir], px = -dy, py = dx;
-  shadow(ctx, cx, cy + 9, 7, 3);
-  ctx.save(); ctx.translate(cx, cy + bob); ctx.rotate(tilt); ctx.translate(-cx, -cy - bob); cy += bob;
-  circle(ctx, cx - dx * 2, cy + 1, 7, C.chick, '#f0d78a', 1.2);
-  for (let i = 0; i < 3; i++) circle(ctx, cx - dx * 6 - dx * i * 1.5 + px * (i - 1) * 3, cy + 1 - dy * 6 + py * (i - 1) * 3, 2.2, C.chick);
+  if (shade) shadow(ctx, cx, cy + 9, 7, 3); cy += bob;
+  circle(ctx, cx - dx * 2, cy + 1, 7, C.mDuckling, C.mDucklingShade, 1.2);
+  circle(ctx, cx - dx * 2, cy + 3, 3.5, C.mFace);
   const hx = cx + dx * 4, hy = cy - 4 + dy * 3;
-  circle(ctx, hx, hy, 5.5, C.chick, '#f0d78a', 1.2);
-  ctx.beginPath(); ctx.moveTo(hx + dx * 4 + px * 2, hy + dy * 4 + py * 2); ctx.lineTo(hx + dx * 8, hy + dy * 8); ctx.lineTo(hx + dx * 4 - px * 2, hy + dy * 4 - py * 2); ctx.closePath(); ctx.fillStyle = C.beakOrange; ctx.fill();
+  circle(ctx, hx, hy, 5.5, C.mDuckling, C.mDucklingShade, 1.2);
+  circle(ctx, hx + dx * 2.5, hy + dy * 2.5, 3.8, C.mFace);
+  ctx.beginPath(); ctx.moveTo(hx + dx * 4 + px * 2, hy + dy * 4 + py * 2); ctx.lineTo(hx + dx * 9, hy + dy * 9); ctx.lineTo(hx + dx * 4 - px * 2, hy + dy * 4 - py * 2); ctx.closePath(); ctx.fillStyle = C.beakYellow; ctx.fill();
+  ctx.strokeStyle = C.mDucklingShade; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(hx + dx + px * 2.5, hy + dy + py * 2.5); ctx.lineTo(hx - dx * 4 + px * 2.5, hy - dy * 4 + py * 2.5); ctx.moveTo(hx + dx - px * 2.5, hy + dy - py * 2.5); ctx.lineTo(hx - dx * 4 - px * 2.5, hy - dy * 4 - py * 2.5); ctx.stroke();
   circle(ctx, hx + dx + px * 2.5, hy + dy + py * 2.5, 1.6, C.ink); circle(ctx, hx + dx - px * 2.5, hy + dy - py * 2.5, 1.6, C.ink);
-  ctx.restore();
 }
 /* Baby bird dispatcher by family kind */
-function drawBaby(ctx, kind, cx, cy, dir, phase) {
-  if (kind === 'hen') drawChick(ctx, cx, cy, dir, -Math.abs(Math.sin(phase)) * 3, Math.sin(phase * 1.3) * 0.12);
-  else drawDuckling(ctx, cx, cy, dir, Math.sin(phase) * 2, kind === 'whiteduck' ? C.whiteDuck : C.duck);
+function drawBaby(ctx, kind, cx, cy, dir, phase, shade = true) {
+  if (kind === 'mallard') drawMallardDuckling(ctx, cx, cy, dir, Math.sin(phase) * 2, shade);
+  else drawDuckling(ctx, cx, cy, dir, Math.sin(phase) * 2, C.duck, shade);
 }
 function drawMother(ctx, kind, cx, cy, dir, opts = {}) {
-  if (kind === 'hen') drawHen(ctx, cx, cy, dir, opts);
-  else drawDuck(ctx, cx, cy, dir, Object.assign({ body: kind === 'whiteduck' ? C.whiteDuck : C.duck }, opts));
+  if (kind === 'mallard') drawMallard(ctx, cx, cy, dir, opts);
+  else drawDuck(ctx, cx, cy, dir, opts);
 }
-/* "Teenager" leaving the flock: bigger baby with a party hat */
-function drawTeen(ctx, cx, cy, dir, kind) {
-  ctx.save(); ctx.translate(cx, cy); ctx.scale(1.35, 1.35); ctx.translate(-cx, -cy); drawBaby(ctx, kind, cx, cy, dir, 0); ctx.restore();
-  const [dx, dy] = DIRS[dir], hx = cx + dx * 5.5, hy = cy - 6 + dy * 4;
+/* "Teenager" leaving the flock: bigger baby with a party hat. `flap` (null = grounded,
+   else -1..1 wing angle) draws a pair of beating wings and drops the ground shadow. */
+function drawTeen(ctx, cx, cy, dir, kind, flap = null) {
+  const [dx, dy] = DIRS[dir], px = -dy, py = dx;
+  const wingCol = kind === 'mallard' ? C.mDuckling : C.duck, wingEdge = kind === 'mallard' ? C.mDucklingShade : C.duckShade;
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(1.35, 1.35); ctx.translate(-cx, -cy);
+  if (flap !== null) {
+    // wings hinge on the body's shoulders and swing up/down together
+    const bx = cx - dx * 2, by = cy + 1, lift = -4 - flap * 7;
+    for (const side of [1, -1]) {
+      const sx = bx + px * side * 5, sy = by + py * side * 5;
+      ctx.beginPath(); ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(sx + px * side * 9 + dx * 2, sy + py * side * 9 + lift * 1.4 + dy * 2, sx + px * side * 13 - dx * 3, sy + py * side * 13 + lift - dy * 3);
+      ctx.quadraticCurveTo(sx + px * side * 7 - dx * 4, sy + py * side * 7 + lift * 0.4 - dy * 4, sx - dx * 2, sy - dy * 2); ctx.closePath();
+      ctx.fillStyle = wingCol; ctx.fill(); ctx.strokeStyle = wingEdge; ctx.lineWidth = 1.2; ctx.stroke();
+    }
+  }
+  drawBaby(ctx, kind, cx, cy, dir, 0, flap === null); ctx.restore();
+  const hx = cx + dx * 5.5, hy = cy - 6 + dy * 4;
   ctx.beginPath(); ctx.moveTo(hx - 6, hy - 2); ctx.lineTo(hx + 6, hy - 2); ctx.lineTo(hx, hy - 16); ctx.closePath();
   ctx.fillStyle = '#fd79a8'; ctx.fill(); ctx.strokeStyle = '#e84393'; ctx.lineWidth = 1.2; ctx.stroke();
   ctx.strokeStyle = '#ffeaa7'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(hx - 3, hy - 7); ctx.lineTo(hx + 3, hy - 7); ctx.stroke();
@@ -432,7 +469,16 @@ function drawPond(ctx, gx, gy, w, h) {
   ellipse(ctx, x + w * TS / 2, y + h * TS / 2, w * TS / 2 - 6, h * TS / 2 - 6, 0, C.pond, C.pondDark, 2);
   ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
   for (let i = 0; i < 3; i++) { const yy = y + h * TS * (0.35 + i * 0.18), xx = x + w * TS * (0.3 + i * 0.12); ctx.beginPath(); ctx.moveTo(xx, yy); ctx.quadraticCurveTo(xx + 8, yy - 3, xx + 16, yy); ctx.stroke(); }
-  circle(ctx, x + w * TS * 0.7, y + h * TS * 0.6, 7, '#2ecc71');
+  drawLilyPad(ctx, x + w * TS * 0.7, y + h * TS * 0.6, 9, -0.6);
+}
+/* Lily pad: disc with a pie-slice notch, darker rim and faint radial veins. `a` is the notch direction */
+function drawLilyPad(ctx, cx, cy, r, a) {
+  const notch = 0.5;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a + notch, a - notch + Math.PI * 2); ctx.closePath();
+  ctx.fillStyle = '#3fbf5f'; ctx.fill(); ctx.strokeStyle = '#1f8f3f'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.strokeStyle = 'rgba(20,110,50,0.45)'; ctx.lineWidth = 1; ctx.beginPath();
+  for (let i = 1; i < 5; i++) { const t = a + notch + (Math.PI * 2 - notch * 2) * i / 5; ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(t) * (r - 2), cy + Math.sin(t) * (r - 2)); }
+  ctx.stroke();
 }
 function drawHayBale(ctx, gx, gy) {
   const x = gx * TS, y = gy * TS;
@@ -640,6 +686,7 @@ class Game {
   constructor(canvas) {
     this.canvas = canvas; this.ctx = canvas.getContext('2d');
     this.state = 'menu'; this.menuIndex = 0; this.settingsOpen = false; this.settingsIndex = 0; this.helpOpen = false;
+    this.creditsOpen = false; this.eggClicks = 0; // title-screen easter egg: five clicks on the cursor egg
     this.particles = new Particles(); this.hits = []; this.time = 0;
     // per-round collections also exist on the menu so idle updates never see undefined
     this.birds = []; this.foxes = []; this.teens = []; this.toasts = []; this.egg = null; this.cake = null; this.potion = null; this.hatchFx = null;
@@ -693,10 +740,11 @@ class Game {
     const keepOut = [{ x: p1Head.x - 4, y: p1Head.y - 3, w: 16, h: 7 }];
     if (this.mode.players === 2) keepOut.push({ x: p2Head.x - 11, y: p2Head.y - 3, w: 16, h: 7 });
     this.level = generateLevel(keepOut);
-    this.birds = [new Bird(0, 'duck', Input.P1, p1Head, 'right')];
-    if (this.mode.players === 2) this.birds.push(new Bird(1, modeId === 'versus' ? 'hen' : 'whiteduck', Input.P2, p2Head, 'left'));
+    this.birds = [new Bird(0, 'duck', this.mode.players === 2 ? Input.P1 : Input.SOLO, p1Head, 'right')];
+    if (this.mode.players === 2) this.birds.push(new Bird(1, 'mallard', Input.P2, p2Head, 'left'));
     this.foxes = []; this.cake = null; this.potion = null; this.teens = []; this.toasts = []; this.particles.list = [];
     this.score = 0; this.eggs = 0; this.elapsed = 0; this.ticks = 0; this.acc = 0; this.alpha = 0;
+    this.startBest = this.mode.board ? (Storage.scores(this.mode.board)[0] || { score: 0 }).score : 0; this.recordAt = -1;
     this.foxTimer = CONFIG.fox.firstAt; this.cakeTimer = CONFIG.cake.after; this.potionTimer = CONFIG.potion.after;
     this.egg = this.spawnEgg(); this.hatchFx = null;
     this.result = null; this.stateTime = 0; this.countdownLast = -1;
@@ -723,6 +771,7 @@ class Game {
   /* ---- input ---- */
   onKey(code) {
     if (this.gateReason) return;
+    if (this.creditsOpen) { if (['Escape', 'Enter', 'Space'].includes(code)) this.closeCredits(); return; }
     if (this.helpOpen) { if (['Escape', 'Enter', 'Space', 'KeyH'].includes(code)) this.closeHelp(); return; }
     if (this.settingsOpen) return this.settingsKey(code);
     switch (this.state) {
@@ -763,6 +812,9 @@ class Game {
   openHelp() { this.helpOpen = true; Audio.sfx('menu'); }
   closeHelp() { this.helpOpen = false; Audio.sfx('menu'); }
   closeSettings() { this.settingsOpen = false; Audio.sfx('menu'); }
+  eggClick() { this.eggClicks++; if (this.eggClicks >= 5) this.openCredits(); else Audio.sfx('egg'); }
+  openCredits() { this.creditsOpen = true; this.eggClicks = 0; Audio.sfx('hatch'); }
+  closeCredits() { this.creditsOpen = false; Audio.sfx('menu'); }
   toMenu() { this.state = 'menu'; Audio.duck(false); Audio.sfx('menu'); }
   /* Pointer: hit-test the clickable regions registered during the last draw */
   onPointer(e) {
@@ -782,7 +834,7 @@ class Game {
     }
     if (this.state === 'playing' && !this.settingsOpen) {
       this.elapsed += dt;
-      this.updateSpawners(dt);
+      this.updateSpawners(dt); this.updateFoxes(dt);
       this.acc += dt;
       const tickDur = 1 / this.tps();
       while (this.acc >= tickDur && this.state === 'playing') { this.acc -= tickDur; this.tick(); }
@@ -795,17 +847,55 @@ class Game {
     // things that animate regardless of state (not while paused)
     if (this.state !== 'paused' && !this.settingsOpen) {
       this.particles.update(dt);
-      for (const t of this.teens) { t.t += dt; if (t.t >= t.dur && !t.done) { t.done = true; this.particles.burst(t.px, t.py, 26, 'confetti', { colors: ['#ff7675', '#ffeaa7', '#74b9ff', '#55efc4', '#fd79a8', '#a29bfe'], speedMax: 200 }); } }
+      for (const t of this.teens) {
+        t.t += dt;
+        if (!t.popped && t.t >= CONFIG.teenTakeoff) { t.popped = true; this.particles.burst(t.px, t.py, 26, 'confetti', { colors: ['#ff7675', '#ffeaa7', '#74b9ff', '#55efc4', '#fd79a8', '#a29bfe'], speedMax: 200 }); }
+        if (t.t >= t.dur) t.done = true;
+      }
       this.teens = this.teens.filter(t => !t.done);
       if (this.egg) { this.egg.twitchT -= dt; if (this.egg.twitchT < -0.15) { this.egg.twitchT = rand(2, 5); } }
       if (this.hatchFx) { this.hatchFx.t += dt; if (this.hatchFx.t > 0.5) this.hatchFx = null; }
+    }
+  }
+  /* ---- foxes: nap, then stroll a few tiles in one direction, then nap again ---- */
+  makeFox(p) { const F = CONFIG.fox; return { x: p.x, y: p.y, px: p.x, py: p.y, phase: rand(0, 6), awake: false, state: 'nap', timer: rand(F.napMin, F.napMax), dir: 'right', stepsLeft: 0, stepT: 0 }; }
+  /* A fox may step onto a tile only if nothing is there and no live head is about to enter it. */
+  foxCanEnter(p) {
+    if (this.level.blocked.has(key(p.x, p.y))) return false;
+    if (this.foxes.some(f => f.x === p.x && f.y === p.y)) return false;
+    if (this.egg && this.egg.x === p.x && this.egg.y === p.y) return false;
+    if (this.cake && this.cake.x === p.x && this.cake.y === p.y) return false;
+    if (this.potion && this.potion.x === p.x && this.potion.y === p.y) return false;
+    for (const b of this.birds) {
+      if (b.occupies(p)) return false;
+      if (!b.alive) continue;
+      for (const d of [b.dir, b.queue[0]]) { if (!d) continue; const [dx, dy] = DIRS[d]; if (wrapX(b.head.x + dx) === p.x && wrapY(b.head.y + dy) === p.y) return false; }
+    }
+    return true;
+  }
+  foxAhead(f) { const [dx, dy] = DIRS[f.dir]; return { x: wrapX(f.x + dx), y: wrapY(f.y + dy) }; }
+  updateFoxes(dt) {
+    const F = CONFIG.fox;
+    for (const f of this.foxes) {
+      if (f.stepT < F.stepEvery) f.stepT += dt;
+      f.timer -= dt;
+      if (f.timer > 0) continue;
+      if (f.state === 'nap') {
+        const dirs = ['up', 'down', 'left', 'right'].filter(d => { f.dir = d; return this.foxCanEnter(this.foxAhead(f)); });
+        if (!dirs.length) { f.timer = rand(F.napMin, F.napMax); continue; }
+        f.dir = dirs[randInt(0, dirs.length - 1)]; f.state = 'walk'; f.stepsLeft = randInt(F.strollMin, F.strollMax); f.timer = 0;
+      }
+      // walking: one step per stepEvery seconds while the way ahead stays free
+      const n = this.foxAhead(f);
+      if (f.stepsLeft > 0 && this.foxCanEnter(n)) { f.px = f.x; f.py = f.y; f.x = n.x; f.y = n.y; f.stepT = 0; f.stepsLeft--; f.timer = F.stepEvery; }
+      else { f.state = 'nap'; f.stepsLeft = 0; f.timer = rand(F.napMin, F.napMax); }
     }
   }
   updateSpawners(dt) {
     const F = CONFIG.fox;
     this.foxTimer -= dt;
     if (this.foxTimer <= 0 && this.foxes.length < F.max) {
-      const p = this.freeTile(F.max + 2); if (p) { this.foxes.push({ x: p.x, y: p.y, phase: rand(0, 6), awake: false }); this.toast('A fox is napping nearby…', 'rgba(230,126,34,0.9)'); Audio.sfx('foxspawn'); }
+      const p = this.freeTile(F.max + 2); if (p) { this.foxes.push(this.makeFox(p)); this.toast('A fox is prowling nearby…', 'rgba(230,126,34,0.9)'); Audio.sfx('foxspawn'); }
       // interval shrinks from intervalStart to intervalMin over the first 2 minutes
       this.foxTimer = lerp(F.intervalStart, F.intervalMin, clamp(this.elapsed / 120, 0, 1));
     }
@@ -879,6 +969,10 @@ class Game {
   collectEgg(b) {
     const ex = this.egg.x * TS + TS / 2, ey = this.egg.y * TS + TS / 2;
     b.hatch(this.time); this.eggs++; if (this.mode.board) this.score += CONFIG.eggPoints;
+    if (this.mode.board && this.recordAt < 0 && this.startBest > 0 && this.score > this.startBest) {
+      this.recordAt = this.time; this.toast('★ NEW BEST! ★', 'rgba(201,146,10,0.95)'); Audio.sfx('record');
+      this.particles.burst(ex, ey, 30, 'confetti', { colors: ['#ff7675', '#ffeaa7', '#74b9ff', '#55efc4', '#fd79a8', '#a29bfe'], speedMax: 220 });
+    }
     this.hatchFx = { x: ex, y: ey, t: 0 };
     this.particles.burst(ex, ey, 14, 'star', { colors: ['#f9ca24', '#ffeaa7', '#ffffff'], speedMax: 140 });
     Audio.sfx('egg'); setTimeout(() => Audio.sfx('hatch'), 120);
@@ -891,9 +985,10 @@ class Game {
     if (b.babies === 0) { this.toast('Yummy cake! (no babies to grow up)'); return; }
     const last = b.segs.pop(); b.prev.length = b.segs.length;
     const ahead = b.segs[b.segs.length - 1];
-    this.teens.push({ px: last.x * TS + TS / 2, py: last.y * TS + TS / 2, kind: b.kind, dir: dirBetween(last, ahead), t: 0, dur: 0.9 });
-    this.toast('Happy birthday! One ' + (b.kind === 'hen' ? 'chick' : 'duckling') + ' grew up 🎉', 'rgba(253,121,168,0.9)');
-    setTimeout(() => Audio.sfx('teen'), 400);
+    // The teen hops in place, pops confetti at take-off, then flies up and off the top of the board
+    this.teens.push({ px: last.x * TS + TS / 2, py: last.y * TS + TS / 2, kind: b.kind, dir: dirBetween(last, ahead), t: 0, dur: 1.7, popped: false });
+    this.toast('Happy birthday! One duckling grew up 🎉', 'rgba(253,121,168,0.9)');
+    setTimeout(() => Audio.sfx('teen'), CONFIG.teenTakeoff * 1000);
   }
   collectPotion(b) {
     const px = this.potion.x * TS + TS / 2, py = this.potion.y * TS + TS / 2;
@@ -901,7 +996,7 @@ class Game {
     this.potion = null; Audio.sfx('potion');
     const opp = this.birds.find(o => o !== b);
     this.egg.magnet = opp.id; this.egg.rollTicks = 0;
-    this.toast(`✦ ${b.kind === 'hen' ? 'Hen' : 'Duck'} used the potion — the egg rolls to the ${opp.kind === 'hen' ? 'Hen' : 'Duck'}! ✦`, 'rgba(162,155,254,0.92)');
+    this.toast(`✦ ${birdName(b)} used the potion — the egg rolls to the ${birdName(opp)}! ✦`, 'rgba(162,155,254,0.92)');
   }
   onCrash(crashes) {
     for (const [b, cause] of crashes) {
@@ -920,16 +1015,16 @@ class Game {
     const dead = this.birds.filter(b => !b.alive), alive = this.birds.filter(b => b.alive);
     const r = { title: 'GAME OVER', sub: '', record: false, index: -1 };
     if (this.modeId === 'versus') {
-      const [d, h] = this.birds;
-      let winner = alive.length === 1 ? alive[0] : (d.babies > h.babies ? d : h.babies > d.babies ? h : null);
-      r.title = winner ? (winner.kind === 'hen' ? 'HEN WINS!' : 'DUCK WINS!') : "IT'S A DRAW!";
-      r.sub = `Duck ${d.babies} ducklings · Hen ${h.babies} chicks · ${fmtTime(this.elapsed)}`;
+      const [d, m] = this.birds;
+      let winner = alive.length === 1 ? alive[0] : (d.babies > m.babies ? d : m.babies > d.babies ? m : null);
+      r.title = winner ? birdName(winner).toUpperCase() + ' WINS!' : "IT'S A DRAW!";
+      r.sub = `Yellow Duck ${d.babies} ducklings · Mallard ${m.babies} ducklings · ${fmtTime(this.elapsed)}`;
       r.winner = winner; r.record = !!winner;
     } else {
       const res = Storage.addScore(this.mode.board, { score: this.score, eggs: this.eggs, date: fmtDate(new Date()) });
       r.index = res.index; r.record = res.isRecord;
       if (res.isRecord) r.title = 'NEW HIGH SCORE!';
-      r.sub = `${this.eggs} eggs · ${fmtTime(this.elapsed)} survived` + (dead[0] && dead[0].deathCause === 'fox' ? ' · got by a fox' : '');
+      r.sub = `${this.eggs} eggs · ${fmtTime(this.elapsed)} survived` + (dead[0] && dead[0].deathCause === 'fox' ? ' · Caught by a fox' : '');
     }
     this.result = r; this.state = 'gameover'; this.stateTime = 0; Audio.duck(true);
     if (r.record) { this.particles.rain(160); Audio.sfx('record'); } else Audio.sfx('gameover');
@@ -943,6 +1038,7 @@ class Game {
     else this.drawGame(ctx);
     if (this.settingsOpen) this.drawSettings(ctx);
     if (this.helpOpen) this.drawHelp(ctx);
+    if (this.creditsOpen) this.drawCredits(ctx);
   }
   /* Draw a sprite at a possibly-fractional tile position, duplicating across wrap edges */
   wrapped(ctx, tx, ty, fn) {
@@ -964,7 +1060,11 @@ class Game {
       const tilt = Math.sin(t * 2.2) * 0.18 + (e.twitchT < 0 ? Math.sin(t * 60) * 0.12 : 0) + (e.magnet !== null ? Math.sin(t * 12) * 0.25 : 0);
       this.wrapped(ctx, ex, ey, (x, y) => { if (e.magnet !== null) circle(ctx, x, y + 2, 16, 'rgba(162,155,254,0.25)'); drawEgg(ctx, x, y, tilt); });
     }
-    for (const f of this.foxes) this.wrapped(ctx, f.x, f.y, (x, y) => drawFox(ctx, x, y, f.awake ? 1.1 : 1 + Math.sin(t * 1.6 + f.phase) * 0.06, f.awake));
+    for (const f of this.foxes) {
+      const k = clamp(f.stepT / CONFIG.fox.stepEvery, 0, 1), walking = f.state === 'walk' || k < 1;
+      const fx = f.px + wrapDelta(f.px, f.x, COLS) * k, fy = f.py + wrapDelta(f.py, f.y, ROWS) * k, bob = walking && !f.awake ? Math.abs(Math.sin(t * 16 + f.phase)) * -2 : 0;
+      this.wrapped(ctx, fx, fy, (x, y) => drawFox(ctx, x, y + bob, f.awake ? 1.1 : 1 + Math.sin(t * 1.6 + f.phase) * 0.06, f.awake || walking));
+    }
     if (this.cake) { const c = this.cake, blink = c.ttl < 3 && Math.sin(t * 14) > 0; if (!blink) this.wrapped(ctx, c.x, c.y, (x, y) => drawCake(ctx, x, y, 1 + Math.sin(t * 5 + c.phase) * 0.05, Math.random() * 2)); }
     if (this.potion) { const p = this.potion, blink = p.ttl < 3 && Math.sin(t * 14) > 0; if (!blink) this.wrapped(ctx, p.x, p.y, (x, y) => drawPotion(ctx, x, y, Math.sin(t * 2 + p.phase) * 3, (t * 0.5 + p.phase) % 1)); }
     if (this.hatchFx) { const h = this.hatchFx; if (h.t < 0.25) drawEgg(ctx, h.x, h.y, 0, true); }
@@ -992,10 +1092,23 @@ class Game {
         ctx.globalAlpha = 1;
       });
     }
-    // teenagers spinning away
+    // teenagers flying away: a hop on the spot, then an accelerating climb off the top of the board
     for (const tn of this.teens) {
-      const k = tn.t / tn.dur; ctx.save(); ctx.translate(tn.px, tn.py); ctx.rotate(k * Math.PI * 2); ctx.scale(1 + k * 0.3, 1 + k * 0.3); ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 1;
-      drawTeen(ctx, 0, 0, tn.dir, tn.kind); ctx.restore();
+      const take = CONFIG.teenTakeoff, k = tn.t / tn.dur;
+      if (tn.t < take) {
+        const hop = Math.sin(tn.t / take * Math.PI) * 6, flap = Math.sin(tn.t * 40);
+        ctx.save(); ctx.translate(tn.px, tn.py - hop); drawTeen(ctx, 0, 0, tn.dir, tn.kind, flap); ctx.restore();
+        shadow(ctx, tn.px, tn.py + 9, 7 - hop * 0.3, 3 - hop * 0.15);
+        continue;
+      }
+      const f = (tn.t - take) / (tn.dur - take);                       // 0..1 over the flight
+      const climb = f * f * (tn.py + 80);                              // ease-in; always exits above the canvas
+      const sway = Math.sin(f * Math.PI * 3) * 12 + DIRS[tn.dir][0] * f * 30;
+      const scale = 1 - f * 0.55, flap = Math.sin(tn.t * 34);
+      ctx.save(); ctx.globalAlpha = clamp((1 - f) * 2.5, 0, 1) * (1 - f * 0.3);
+      shadow(ctx, tn.px + sway, tn.py + 9, 7 * (1 - f), 3 * (1 - f));
+      ctx.translate(tn.px + sway, tn.py - climb); ctx.rotate(Math.cos(f * Math.PI * 3) * 0.12); ctx.scale(scale, scale);
+      drawTeen(ctx, 0, 0, tn.dir, tn.kind, flap); ctx.restore();
     }
     // POOF cloud over a fox encounter
     for (const b of this.birds) if (!b.alive && b.deathCause === 'fox') {
@@ -1016,7 +1129,7 @@ class Game {
       const n = Math.ceil(CONFIG.countdownTime - this.stateTime), frac = 1 - ((CONFIG.countdownTime - this.stateTime) % 1);
       ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(0, HUD_H, W, H - HUD_H);
       text(ctx, n > 0 ? String(n) : 'GO!', W / 2, H / 2 + 20, 110 + frac * 30, '#fff3a1', { stroke: C.woodDark, lw: 12 });
-      text(ctx, this.mode.players === 2 ? 'P1: arrow keys     P2: W A S D' : 'Arrow keys to steer · SPACE to pause', W / 2, H / 2 + 110, 18, '#ffffff', { stroke: 'rgba(0,0,0,0.5)', lw: 4 });
+      text(ctx, this.mode.players === 2 ? 'P1: W A S D     P2: arrow keys' : 'Arrows or WASD to steer · SPACE to pause', W / 2, H / 2 + 110, 18, '#ffffff', { stroke: 'rgba(0,0,0,0.5)', lw: 4 });
     }
     if (this.state === 'paused') {
       ctx.fillStyle = 'rgba(45,52,54,0.55)'; ctx.fillRect(0, HUD_H, W, H - HUD_H);
@@ -1037,13 +1150,19 @@ class Game {
   }
   drawHUD(ctx) {
     const items = [{ label: 'MODE', value: this.mode.name, color: '#fff3a1' }];
-    const [p1, p2] = this.birds, best = this.mode.board ? (Storage.scores(this.mode.board)[0] || { score: 0 }).score : null;
-    if (this.modeId === 'duck') items.push({ label: 'SCORE', value: this.score }, { label: 'EGGS', value: this.eggs }, { label: 'BEST', value: best, color: '#ffeaa7' });
-    else if (this.modeId === 'coop') items.push({ label: 'SCORE', value: this.score }, { label: 'P1 DUCKLINGS', value: p1.babies, color: '#fff3a1' }, { label: 'P2 DUCKLINGS', value: p2.babies, color: '#ffffff' }, { label: 'BEST', value: best, color: '#ffeaa7' });
-    else items.push({ label: 'DUCK (P1)', value: p1.babies + ' ducklings', color: '#fff3a1' }, { label: 'HEN (P2)', value: p2.babies + ' chicks', color: '#ffb366' }, { label: 'TIME', value: fmtTime(this.elapsed) });
+    const [p1, p2] = this.birds, onRecord = this.recordAt >= 0, best = this.mode.board ? Math.max(this.startBest, this.score) : null;
+    const sinceRecord = onRecord ? this.time - this.recordAt : 0, pulse = onRecord ? 0.55 + 0.45 * Math.sin(this.time * 5) : 0;
+    const bestItem = { label: 'BEST', value: best, color: onRecord ? '#f9ca24' : '#ffeaa7', glow: pulse, pop: onRecord ? 1 + 0.5 * Math.max(0, 1 - sinceRecord * 2.5) : 1 };
+    if (this.modeId === 'duck') items.push({ label: 'SCORE', value: this.score }, { label: 'EGGS', value: this.eggs }, bestItem);
+    else if (this.modeId === 'coop') items.push({ label: 'SCORE', value: this.score }, { label: 'P1 DUCKLINGS', value: p1.babies, color: '#fff3a1' }, { label: 'P2 DUCKLINGS', value: p2.babies, color: '#d9a46a' }, bestItem);
+    else items.push({ label: 'DUCK (P1)', value: p1.babies + ' ducklings', color: '#fff3a1' }, { label: 'MALLARD (P2)', value: p2.babies + ' ducklings', color: '#d9a46a' }, { label: 'TIME', value: fmtTime(this.elapsed) });
     items.push({ label: 'SPEED', value: '×' + (this.tps() / CONFIG.baseTps).toFixed(1) }, { label: 'SPACE', value: this.state === 'paused' ? 'resume' : 'pause', color: '#b2bec3' });
     const slot = W / items.length;
-    items.forEach((it, i) => { const x = slot * i + slot / 2; text(ctx, it.label, x, 15, 10, '#b2bec3', { weight: 700 }); text(ctx, String(it.value), x, 33, 16, it.color || '#ffffff'); });
+    items.forEach((it, i) => {
+      const x = slot * i + slot / 2; text(ctx, it.label, x, 15, 10, '#b2bec3', { weight: 700 });
+      if (it.glow) { ctx.save(); ctx.shadowColor = '#f9ca24'; ctx.shadowBlur = 6 + 10 * it.glow; text(ctx, String(it.value), x, 33, 16 * (it.pop || 1), it.color); ctx.restore(); }
+      else text(ctx, String(it.value), x, 33, 16, it.color || '#ffffff');
+    });
   }
   drawGameOver(ctx) {
     const r = this.result, k = clamp(this.stateTime / 0.4, 0, 1);
@@ -1057,14 +1176,14 @@ class Game {
     if (this.modeId === 'versus') {
       const w = r.winner;
       if (w) { ctx.save(); ctx.translate(W / 2, py + 120); ctx.rotate(Math.sin(this.time * 8) * 0.1); ctx.scale(2, 2); drawMother(ctx, w.kind, 0, 0, 'right'); ctx.restore(); }
-      else { ctx.save(); ctx.translate(W / 2 - 50, py + 120); ctx.scale(1.6, 1.6); drawDuck(ctx, 0, 0, 'right'); ctx.restore(); ctx.save(); ctx.translate(W / 2 + 50, py + 120); ctx.scale(1.6, 1.6); drawHen(ctx, 0, 0, 'left'); ctx.restore(); }
+      else { ctx.save(); ctx.translate(W / 2 - 50, py + 120); ctx.scale(1.6, 1.6); drawDuck(ctx, 0, 0, 'right'); ctx.restore(); ctx.save(); ctx.translate(W / 2 + 50, py + 120); ctx.scale(1.6, 1.6); drawMallard(ctx, 0, 0, 'left'); ctx.restore(); }
       text(ctx, r.sub, W / 2, py + 175, 14, '#636e72', { weight: 700 });
     } else {
       text(ctx, String(this.score), W / 2, py + 100, 56, C.ink);
       text(ctx, r.sub, W / 2, py + 140, 14, '#636e72', { weight: 700 });
       const dance = r.record ? Math.sin(this.time * 8) * 0.15 : 0, hop = r.record ? -Math.abs(Math.sin(this.time * 8)) * 6 : 0;
       ctx.save(); ctx.translate(px + 60, py + 110 + hop); ctx.rotate(-dance); ctx.scale(1.6, 1.6); drawDuck(ctx, 0, 0, 'right', { dizzy: !r.record }); ctx.restore();
-      ctx.save(); ctx.translate(px + pw - 60, py + 110 + hop); ctx.rotate(dance); ctx.scale(1.6, 1.6); drawDuck(ctx, 0, 0, 'left', { body: this.modeId === 'coop' ? C.whiteDuck : C.duck, dizzy: !r.record }); ctx.restore();
+      ctx.save(); ctx.translate(px + pw - 60, py + 110 + hop); ctx.rotate(dance); ctx.scale(1.6, 1.6); drawMother(ctx, this.modeId === 'coop' ? 'mallard' : 'duck', 0, 0, 'left', { dizzy: !r.record }); ctx.restore();
       drawBoard(ctx, px + 40, py + 165, pw - 80, 'BEST — ' + this.mode.name, Storage.scores(this.mode.board), r.index);
     }
     this.button(ctx, W / 2 - 105, py + ph - 36, 196, 'PLAY AGAIN', true, () => this.onKey('Enter'), 'ENTER');
@@ -1075,12 +1194,12 @@ class Game {
     const t = this.time;
     ctx.drawImage(this.menuLayer, 0, 0);
     text(ctx, 'DUCK DUCK', W / 2, 92, 72, '#fff3a1', { stroke: C.woodDark, lw: 10 });
-    text(ctx, 'CHICKEN', W / 2, 160, 72, C.hen, { stroke: C.woodDark, lw: 10 });
+    text(ctx, 'EGG', W / 2, 160, 72, C.egg, { stroke: C.woodDark, lw: 10 });
     // mascots waddle in place
     ctx.save(); ctx.translate(150, 130 + Math.sin(t * 4) * 3); ctx.rotate(Math.sin(t * 4) * 0.05); ctx.scale(2.6, 2.6); drawDuck(ctx, 0, 0, 'right'); ctx.restore();
     for (let i = 0; i < 3; i++) { ctx.save(); ctx.translate(90 - i * 34, 190); ctx.scale(2, 2); drawDuckling(ctx, 0, 0, 'right', Math.sin(t * 7 + i) * 2); ctx.restore(); }
-    ctx.save(); ctx.translate(874, 130 + Math.sin(t * 4 + 1) * 3); ctx.rotate(Math.sin(t * 4 + 1) * 0.05); ctx.scale(2.6, 2.6); drawHen(ctx, 0, 0, 'left'); ctx.restore();
-    for (let i = 0; i < 3; i++) { ctx.save(); ctx.translate(934 + i * 34, 190); ctx.scale(2, 2); drawChick(ctx, 0, 0, 'left', -Math.abs(Math.sin(t * 7 + i)) * 3, Math.sin(t * 9 + i) * 0.12); ctx.restore(); }
+    ctx.save(); ctx.translate(874, 130 + Math.sin(t * 4 + 1) * 3); ctx.rotate(Math.sin(t * 4 + 1) * 0.05); ctx.scale(2.6, 2.6); drawMallard(ctx, 0, 0, 'left'); ctx.restore();
+    for (let i = 0; i < 3; i++) { ctx.save(); ctx.translate(934 + i * 34, 190); ctx.scale(2, 2); drawMallardDuckling(ctx, 0, 0, 'left', Math.sin(t * 7 + i) * 2); ctx.restore(); }
     // mode signs
     const xs = [220, 512, 804], ws = [230, 230, 250];
     MODE_ORDER.forEach((id, i) => {
@@ -1089,6 +1208,7 @@ class Game {
     });
     const cur = xs[this.menuIndex] - ws[this.menuIndex] / 2 - 28;
     drawEgg(ctx, cur, 290 + Math.sin(t * 3) * 3, Math.sin(t * 2.2) * 0.2);
+    this.hits.push({ x: cur - 22, y: 290 - 28, w: 44, h: 56, id: 'egg', fn: () => this.eggClick() }); // secret: tap the egg five times
     const id = MODE_ORDER[this.menuIndex], mode = MODES[id];
     // start card: scoreboard (or mode blurb) on top, START band built into the bottom; the whole card starts the game
     this.drawStartCard(ctx, W / 2 - 180, 392, 360, id, () => { Audio.sfx('select'); this.start(id); });
@@ -1160,18 +1280,18 @@ class Game {
     text(ctx, 'HOW TO PLAY', W / 2, py + 36, 32, C.ink);
     const L = px + 36, t = this.time;
     const line = (s, y, size = 14, color = '#2d3436', x = L) => text(ctx, s, x, y, size, color, { align: 'left', weight: 700 });
-    line('Guide the mother bird around the pasture. Collect eggs: each one hatches into a baby that follows you.', py + 72);
-    line('Don\'t bump into your own babies, the other bird, hay bales, fences or a sleeping fox. Edges wrap around.', py + 94);
+    line('Guide your duck around the pasture. Collect eggs: each one hatches into a baby that follows you.', py + 72);
+    line('Don\'t bump into your own babies, the other bird, hay bales, fences or a fox. Edges wrap around.', py + 94);
     // modes
     line('MODES', py + 128, 13, '#636e72');
     line('Duck — solo. Chase the high score.', py + 150);
     line('Duck & Duck — co-op. One shared score; if either bird crashes, it\'s over for both.', py + 172);
-    line('Duck vs Chicken — last bird standing wins. Longer tail breaks a tie. No score, just glory.', py + 194);
+    line('Duck vs Duck — last duck standing wins. Longer tail breaks a tie. No score, just glory.', py + 194);
     // items with live sprites
     line('THINGS YOU\'LL FIND', py + 230, 13, '#636e72');
     const items = [
       [(x, y) => drawEgg(ctx, x, y, Math.sin(t * 2.2) * 0.18), 'Egg', '+10 points and a new baby. There is always one somewhere.'],
-      [(x, y) => drawFox(ctx, x, y, 1 + Math.sin(t * 1.6) * 0.06), 'Fox', 'Napping. Walk into it and POOF, game over. More appear over time.'],
+      [(x, y) => drawFox(ctx, x, y, 1 + Math.sin(t * 1.6) * 0.06), 'Fox', 'Dozes, then prowls a few tiles. Walk into it and POOF, game over. More appear over time.'],
       [(x, y) => drawCake(ctx, x, y, 1 + Math.sin(t * 5) * 0.05, Math.random() * 2), 'Birthday cake', 'Your youngest grows up and leaves: your tail gets one shorter.'],
       [(x, y) => drawPotion(ctx, x, y, Math.sin(t * 2) * 3, (t * 0.5) % 1), 'Magic potion', 'Versus only. The egg rolls toward your opponent so THEY have to grow.'],
     ];
@@ -1179,12 +1299,25 @@ class Game {
     // controls
     line('CONTROLS', py + 462, 13, '#636e72');
     const keycap = (k, x, y, w = 34) => { rrect(ctx, x, y - 13, w, 26, 6, '#ffffff', C.woodDark, 2); text(ctx, k, x + w / 2, y, 12, C.ink); };
-    line('Player 1', py + 490, 14); ['↑', '←', '↓', '→'].forEach((k, i) => keycap(k, L + 90 + i * 38, py + 490));
-    line('Player 2', py + 490, 14, '#2d3436', L + 290); ['W', 'A', 'S', 'D'].forEach((k, i) => keycap(k, L + 380 + i * 38, py + 490));
+    line('Player 1', py + 490, 14); ['W', 'A', 'S', 'D'].forEach((k, i) => keycap(k, L + 90 + i * 38, py + 490));
+    line('Player 2', py + 490, 14, '#2d3436', L + 290); ['↑', '←', '↓', '→'].forEach((k, i) => keycap(k, L + 380 + i * 38, py + 490));
     keycap('SPACE', L + 560, py + 490, 70); line('pause', py + 490, 13, '#636e72', L + 640);
-    line('Speed picks up with every egg. Good luck, and mind the foxes!', py + 524, 13, '#636e72');
+    line('Solo: either set works. Speed picks up with every egg. Good luck, and mind the foxes!', py + 524, 13, '#636e72');
     this.button(ctx, W / 2, py + ph - 40, 170, 'GOT IT', true, () => this.closeHelp(), 'ENTER');
     this.hits.push({ x: 0, y: 0, w: W, h: H, fn: () => this.closeHelp() });
+  }
+  drawCredits(ctx) {
+    this.hits = []; // the overlay owns every click while open
+    ctx.fillStyle = 'rgba(45,52,54,0.55)'; ctx.fillRect(0, 0, W, H);
+    const pw = 640, ph = 230, px = W / 2 - pw / 2, py = H / 2 - ph / 2, t = this.time;
+    rrect(ctx, px, py, pw, ph, 16, C.panel, C.woodDark, 4);
+    text(ctx, 'YOU FOUND A SECRET!', W / 2, py + 44, 26, C.ink);
+    // two big eggs wobble either side of the message
+    [[px + 60, 0], [px + pw - 60, 1]].forEach(([x, ph]) => { ctx.save(); ctx.translate(x, py + 112 + Math.sin(t * 3 + ph) * 3); ctx.scale(1.8, 1.8); drawEgg(ctx, 0, 0, (ph ? -1 : 1) * Math.sin(t * 2.2) * 0.25); ctx.restore(); });
+    text(ctx, 'Designed with ❤️ by', W / 2, py + 96, 20, C.ink);
+    text(ctx, 'Emma (Egga) and Ella (Chinny)', W / 2, py + 128, 22, C.ink);
+    this.button(ctx, W / 2, py + ph - 40, 140, 'AWW', true, () => this.closeCredits(), 'ENTER');
+    this.hits.push({ x: 0, y: 0, w: W, h: H, fn: () => this.closeCredits() }); // click outside closes
   }
   button(ctx, cx, cy, w, label, primary, fn, hint) { drawButton(ctx, cx, cy, w, label, primary, hint); this.hits.push({ x: cx - w / 2, y: cy - 20, w, h: 40, fn }); }
 }
@@ -1196,7 +1329,8 @@ function dirBetween(a, b) {
 
 /* ------------------------------------------------------------------ main */
 const game = new Game(document.getElementById('game'));
-window.DDC = game; // exposed for debugging and the test harness
+window.DDE = game; // exposed for debugging and the test harness
+window.DDE_Storage = Storage; // for the harness' migration check
 let last = performance.now(), lastW = window.innerWidth, lastH = window.innerHeight;
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;   // clamp long frames (tab switch)
@@ -1204,7 +1338,7 @@ function frame(now) {
   game.update(dt); game.draw();
   requestAnimationFrame(frame);
 }
-window.DDC_frame = frame; // lets the test harness run one real frame step deterministically
+window.DDE_frame = frame; // lets the test harness run one real frame step deterministically
 requestAnimationFrame(frame);
 </script>
 </body>
